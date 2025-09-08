@@ -4,7 +4,7 @@ import User from "../models/User.js";
 
 export const stripeWebhooks = async (req, res) => {
     const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
-    const sig = request.headers["stripe-signature"];
+    const sig = req.headers["stripe-signature"];
 
     let event;
 
@@ -18,34 +18,49 @@ export const stripeWebhooks = async (req, res) => {
         switch (event.type) {
             case "payment_intent.succeeded":
                 const paymentIntent = event.data.object;
+
                 const sessionList = await stripe.checkout.sessions.list({
                     payment_intent: paymentIntent.id,
-                })
+                });
 
                 const session = sessionList.data[0];
-                const {transactionId, appId} = session.metadata;
+                if (!session) {
+                    console.error("No checkout session found for paymentIntent:", paymentIntent.id);
+                    break;
+                }
 
-                if (appId === 'apnagpt') {
-                    const transaction = await Transaction.findOne({_id: transactionId, isPaid: false})
+                const { transactionId, appId } = session.metadata || {};
+                if (appId === "apnagpt") {
+                    const transaction = await Transaction.findOne({ _id: transactionId, isPaid: false });
 
-                    //update credits in user account
-                    await User.updateOne({_id: transaction.userId}, {$inc: {credits: transaction.credits}});
+                    if (!transaction) {
+                        console.error("Transaction not found or already paid:", transactionId);
+                        break;
+                    }
 
-                    //update credit payment status
+                    // Update user credits
+                    await User.updateOne(
+                        { _id: transaction.userId },
+                        { $inc: { credits: transaction.credits } }
+                    );
+
+                    // Mark transaction as paid
                     transaction.isPaid = true;
                     await transaction.save();
+
+                    console.log("Transaction marked as paid:", transactionId);
                 } else {
-                    return res.json({received: true, message: "Ignored event: Invalid app"});
+                    return res.json({ received: true, message: "Ignored event: Invalid app" });
                 }
                 break;
-        
+
             default:
-                console.log("unhandled event type: ", event.type);
+                console.log("unhandled event type:", event.type);
                 break;
         }
-        res.json({received: true});
+        res.json({ received: true });
     } catch (error) {
         console.error("webhooks processing error:", error);
         res.status(500).send("Internal server error");
     }
-}
+};
