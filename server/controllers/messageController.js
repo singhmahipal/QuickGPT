@@ -21,7 +21,8 @@ export const textMessageController = async (req, res) => {
 
         const { choices } = await openai.chat.completions.create({
             model: "gemini-2.0-flash",
-            messages: [                {
+            messages: [
+                {
                     role: "user",
                     content: prompt,
                 },
@@ -32,7 +33,8 @@ export const textMessageController = async (req, res) => {
     
         chat.messages.push(reply);
         await chat.save();
-        await UserActivation.updateOne({_id: userId}, {$inc: {credits: -1}});
+        // FIXED: Changed UserActivation to User
+        await User.updateOne({_id: userId}, {$inc: {credits: -1}});
 
         return res.json({success: true, reply});
     } catch (error) {

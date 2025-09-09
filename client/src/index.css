@@ -12,8 +12,14 @@
   --color-primary: #e6ccff;
 }
 
-::-webkit-scrollbar {
+/* Hide scrollbars by default, but allow specific elements to override */
+*:not(.overflow-y-auto)::-webkit-scrollbar {
   display: none;
+}
+
+/* Default scrollbar-width for non-auto elements */
+*:not(.overflow-y-auto) {
+  scrollbar-width: none;
 }
 
 .reset-tw :not(pre):not(code){
@@ -26,4 +32,39 @@
 
 .loader div:nth-child(3) {
   animation-delay: 0.4s;
+}
+
+/* Smooth scrollbar styling for overflow-y-auto elements */
+.overflow-y-auto {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(155, 155, 155, 0.5) transparent;
+  scroll-behavior: smooth;
+}
+
+.overflow-y-auto::-webkit-scrollbar {
+  width: 6px;
+  display: block; /* Override the global hide */
+}
+
+.overflow-y-auto::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.overflow-y-auto::-webkit-scrollbar-thumb {
+  background-color: rgba(155, 155, 155, 0.3);
+  border-radius: 10px;
+  transition: background-color 0.2s ease;
+}
+
+.overflow-y-auto::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(155, 155, 155, 0.6);
+}
+
+/* Dark mode scrollbar */
+.dark .overflow-y-auto::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.2);
+}
+
+.dark .overflow-y-auto::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.4);
 }
