@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useAppContext } from '../context/AppContext';
 import { assets } from '../assets/assets';
 import moment from 'moment';
@@ -17,28 +17,14 @@ const Sidebar = ({ isMenuOpen, setIsMenuOpen }) => {
     setChats,
     fetchUserChats,
     setToken,
-    token
   } = useAppContext();
 
   const [search, setSearch] = useState('');
   const [isChatsLoading, setIsChatsLoading] = useState(false);
 
-  const loadChats = async () => {
-    setIsChatsLoading(true);
-    try {
-      await fetchUserChats();
-    } catch (error) {
-      toast.error("Failed to load chats");
-    } finally {
-      setIsChatsLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (user && token) {
-      loadChats();
-    }
-  }, [user, token]);
+  // NOTE: Chat loading is handled centrally by AppContext's useEffect
+  // (which triggers fetchUserChats when the user state changes).
+  // A duplicate useEffect here was doubling every chat fetch request.
 
   const logout = () => {
     localStorage.removeItem('token');
@@ -52,7 +38,8 @@ const Sidebar = ({ isMenuOpen, setIsMenuOpen }) => {
       const confirmDelete = window.confirm('Are you sure you want to delete this chat?');
       if (!confirmDelete) return;
 
-      const { data } = await axios.post('/api/chat/delete', { chatId }, { headers: { Authorization: token } });
+      // No manual Authorization header needed — axios interceptor injects it
+      const { data } = await axios.post('/api/chat/delete', { chatId });
       if (data.success) {
         setChats(prev => prev.filter(chat => chat._id !== chatId));
         await fetchUserChats();

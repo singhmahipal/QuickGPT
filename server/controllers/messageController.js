@@ -4,100 +4,273 @@ import Chat from "../models/Chat.js";
 import User from "../models/User.js";
 import openai from "../configs/openai.js";
 
-//Text-based AI Chat Message Controller
+// ─── Helper: structured error logger ──────────────────────────────────────────
+const logError = (context, error) => {
+    console.error(`[${context}]`, {
+        message: error.message,
+        status: error?.response?.status,
+        data: error?.response?.data,
+        stack: error.stack?.split('\n')[1]?.trim(),
+    });
+};
+
+// ─── Text-based AI Chat Message Controller ────────────────────────────────────
 export const textMessageController = async (req, res) => {
     try {
         const userId = req.user._id;
 
-        //check credits
+        // ── Credit check ──────────────────────────────────────────────────────
         if (req.user.credits < 1) {
-            return res.json({success: false, message: "you don't have enough credits to use this feature"});
+            return res.status(402).json({
+                success: false,
+                message: "Not enough credits. Please purchase more.",
+                errorCode: "INSUFFICIENT_CREDITS"
+            });
         }
 
-        const {chatId, prompt} = req.body;
+        const { chatId, prompt } = req.body;
 
-        const chat = await Chat.findOne({userId, _id: chatId});
-        chat.messages.push({role: "user", content: prompt, timeStamp: Date.now(), isImage: false});
+        // ── Validate input ────────────────────────────────────────────────────
+        if (!chatId || !prompt?.trim()) {
+            return res.status(400).json({
+                success: false,
+                message: "chatId and prompt are required.",
+                errorCode: "MISSING_FIELDS"
+            });
+        }
 
-        const { choices } = await openai.chat.completions.create({
-            model: "gemini-2.0-flash",
-            messages: [
-                {
-                    role: "user",
-                    content: prompt,
-                },
-            ],
-        });
+        // ── Load chat ─────────────────────────────────────────────────────────
+        const chat = await Chat.findOne({ userId, _id: chatId });
 
-        const reply = {...choices[0].message, timeStamp: Date.now(), isImage: false}
-    
+        // Bug #5 fix: explicit null guard
+        if (!chat) {
+            return res.status(404).json({
+                success: false,
+                message: "Chat not found.",
+                errorCode: "CHAT_NOT_FOUND"
+            });
+        }
+
+        // ── Build full conversation history for Gemini ────────────────────────
+        // Bug #1 fix: send ALL previous messages so the model has context.
+        // Gemini via OpenAI-compatible API only supports "user" and "assistant" roles.
+        const history = chat.messages
+            .filter(m => !m.isImage) // skip image messages — model can't process URLs
+            .map(m => ({
+                role: m.role === 'assistant' ? 'assistant' : 'user',
+                content: m.content,
+            }));
+
+        // Append the current user prompt
+        history.push({ role: 'user', content: prompt });
+
+        // ── Call Gemini via OpenAI-compatible client ───────────────────────────
+        let choices;
+        try {
+            const response = await openai.chat.completions.create({
+                model: "gemini-2.0-flash",
+                messages: history,
+                max_tokens: 2048,
+            });
+            choices = response.choices;
+        } catch (apiError) {
+            logError('Gemini API', apiError);
+
+            // Surface Gemini-specific rate limit as 429
+            if (apiError?.status === 429 || apiError?.response?.status === 429) {
+                return res.status(429).json({
+                    success: false,
+                    message: "AI service is currently rate limited. Please wait a moment and try again.",
+                    errorCode: "UPSTREAM_RATE_LIMIT",
+                    retryAfter: 10, // seconds — hint for the frontend
+                });
+            }
+
+            return res.status(502).json({
+                success: false,
+                message: "AI service unavailable. Please try again shortly.",
+                errorCode: "UPSTREAM_ERROR"
+            });
+        }
+
+        // ── Persist and respond ───────────────────────────────────────────────
+        const aiMessage = choices[0].message;
+        const reply = {
+            role: aiMessage.role,
+            content: aiMessage.content,
+            timeStamp: Date.now(),
+            isImage: false,
+        };
+
+        // Save user message + AI reply to DB
+        chat.messages.push({ role: "user", content: prompt, timeStamp: Date.now(), isImage: false });
         chat.messages.push(reply);
         await chat.save();
-        // FIXED: Changed UserActivation to User
-        await User.updateOne({_id: userId}, {$inc: {credits: -1}});
 
-        return res.json({success: true, reply});
+        // Deduct credit after successful generation
+        await User.updateOne({ _id: userId }, { $inc: { credits: -1 } });
+
+        return res.json({ success: true, reply });
+
     } catch (error) {
-        res.json({success: false, message: error.message});
+        logError('textMessageController', error);
+        return res.status(500).json({
+            success: false,
+            message: "Internal server error during text generation.",
+            errorCode: "SERVER_ERROR"
+        });
     }
-}
+};
 
-// Image generation message controller
+// ─── Image Generation Message Controller ─────────────────────────────────────
 export const imageMessageController = async (req, res) => {
     try {
         const userId = req.user._id;
 
-        //checks credits
+        // ── Credit check ──────────────────────────────────────────────────────
         if (req.user.credits < 2) {
-            return res.json({success: false, message: "you don't have enough credits to use this features"});
+            return res.status(402).json({
+                success: false,
+                message: "Not enough credits for image generation (requires 2).",
+                errorCode: "INSUFFICIENT_CREDITS"
+            });
         }
 
-        const {prompt, chatId, isPublished} = req.body;
+        const { prompt, chatId, isPublished } = req.body;
 
-        //find chat
-        const chat = await Chat.findOne({userId, _id: chatId});
+        // ── Validate input ────────────────────────────────────────────────────
+        if (!chatId || !prompt?.trim()) {
+            return res.status(400).json({
+                success: false,
+                message: "chatId and prompt are required.",
+                errorCode: "MISSING_FIELDS"
+            });
+        }
 
-        //push user message
-        chat.messages.push({
-            role: "user",
-            content: prompt,
-            timeStamp: Date.now(),
-            isImage: false
-        });
+        // ── Load chat ─────────────────────────────────────────────────────────
+        const chat = await Chat.findOne({ userId, _id: chatId });
 
-        //encode the prompt
-        const encodedPrompt = encodeURIComponent(prompt);
+        if (!chat) {
+            return res.status(404).json({
+                success: false,
+                message: "Chat not found.",
+                errorCode: "CHAT_NOT_FOUND"
+            });
+        }
 
-        //construct imagekit AI generation URL
-        const generatedImageUrl = `${process.env.IMAGEKIT_URL_ENDPOINT}/ik-genimg-prompt-${encodedPrompt}/apnagpt/${Date.now()}.png?tr=w-800,h-800`;
+        // ── Generate image via Gemini Imagen 3 ───────────────────────────────
+        // Uses the existing GEMINI_API_KEY — no extra API key or package needed.
+        // Imagen returns base64-encoded PNG bytes directly in the response body,
+        // so there is no intermediate URL to download (faster + more reliable).
+        let imageBuffer;
+        try {
+            const imagenResponse = await axios.post(
+                `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict`,
+                {
+                    instances: [{ prompt }],
+                    parameters: {
+                        sampleCount: 1,
+                        aspectRatio: "1:1",       // square — best for chat UI
+                        safetyFilterLevel: "block_few",
+                    },
+                },
+                {
+                    params: { key: process.env.GEMINI_API_KEY },
+                    headers: { 'Content-Type': 'application/json' },
+                    timeout: 60000, // 60s — Imagen can take up to ~30s on first call
+                }
+            );
 
-        //trigger generation by fetching from imagekit
-        const aiImageResponse = await axios.get(generatedImageUrl, {responseType: "arraybuffer"});
+            // Gemini Imagen returns: { predictions: [{ bytesBase64Encoded, mimeType }] }
+            const prediction = imagenResponse.data?.predictions?.[0];
 
-        //convert to base64
-        const base64Image = `data:image/png;base64,${Buffer.from(aiImageResponse.data,"binary").toString('base64')}`;
+            if (!prediction?.bytesBase64Encoded) {
+                logError('Gemini Imagen', new Error(
+                    `Unexpected Imagen response: ${JSON.stringify(imagenResponse.data)}`
+                ));
+                return res.status(502).json({
+                    success: false,
+                    message: "Image generation returned no data. Please try a different prompt.",
+                    errorCode: "IMAGEN_EMPTY_RESPONSE"
+                });
+            }
 
-        //upload to imagekit media library
-        const uploadResponse = await imagekit.upload({
-            file: base64Image,
-            fileName: `${Date.now()}.png`,
-            folder: "apnagpt"
-        });
+            // Decode base64 directly to buffer — no download step needed
+            imageBuffer = Buffer.from(prediction.bytesBase64Encoded, 'base64');
 
+        } catch (apiError) {
+            logError('Gemini Imagen', apiError);
+
+            const status = apiError?.response?.status;
+
+            if (status === 429) {
+                return res.status(429).json({
+                    success: false,
+                    message: "Image generation service is rate limited. Please try again in a moment.",
+                    errorCode: "UPSTREAM_RATE_LIMIT",
+                    retryAfter: 15,
+                });
+            }
+
+            if (status === 400) {
+                // Usually means the prompt was blocked by safety filters
+                return res.status(400).json({
+                    success: false,
+                    message: "Your prompt was blocked by the safety filter. Please rephrase and try again.",
+                    errorCode: "PROMPT_BLOCKED"
+                });
+            }
+
+            return res.status(502).json({
+                success: false,
+                message: "Image generation service unavailable. Please try again.",
+                errorCode: "IMAGE_API_ERROR"
+            });
+        }
+
+
+        // ── Upload to ImageKit for permanent storage ───────────────────────────
+        let uploadResponse;
+        try {
+            uploadResponse = await imagekit.upload({
+                file: imageBuffer,                    // pass raw buffer — most reliable
+                fileName: `${Date.now()}.png`,
+                folder: "apnagpt",
+                useUniqueFileName: true,
+            });
+        } catch (uploadError) {
+            logError('ImageKit Upload', uploadError);
+            return res.status(502).json({
+                success: false,
+                message: "Failed to store the generated image. Please try again.",
+                errorCode: "IMAGEKIT_UPLOAD_FAILED"
+            });
+        }
+
+        // ── Persist and respond ───────────────────────────────────────────────
         const reply = {
             role: 'assistant',
             content: uploadResponse.url,
             timeStamp: Date.now(),
             isImage: true,
-            isPublished
+            isPublished: !!isPublished,
         };
 
+        chat.messages.push({ role: "user", content: prompt, timeStamp: Date.now(), isImage: false });
         chat.messages.push(reply);
         await chat.save();
-        await User.updateOne({_id: userId}, {$inc: {credits: -2}});
 
-        return res.json({success: true, reply});
+        // Deduct credits after confirmed successful generation + upload
+        await User.updateOne({ _id: userId }, { $inc: { credits: -2 } });
+
+        return res.json({ success: true, reply });
+
     } catch (error) {
-        res.json({success: false, message: error.message});
+        logError('imageMessageController', error);
+        return res.status(500).json({
+            success: false,
+            message: "Internal server error during image generation.",
+            errorCode: "SERVER_ERROR"
+        });
     }
-}
+};

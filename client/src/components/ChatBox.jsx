@@ -1,6 +1,6 @@
 import { assets } from '../assets/assets';
 import { useAppContext } from '../context/AppContext';
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import Message from './Message';
 import toast from 'react-hot-toast';
 import moment from 'moment';
@@ -8,7 +8,8 @@ import moment from 'moment';
 const ChatBox = () => {
   const containerRef = useRef(null);
 
-  const { selectedChat, theme, user, axios, token, setUser } = useAppContext();
+  // token is no longer needed here — axios interceptor injects it automatically
+  const { selectedChat, theme, user, axios, setUser } = useAppContext();
 
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -17,27 +18,38 @@ const ChatBox = () => {
   const [mode, setMode] = useState('text');
   const [isPublished, setIsPublished] = useState(false);
 
-  const onSubmit = async (e) => {
+  // Synchronous guard against double-submit.
+  // React setState is async — a second Enter/click can fire before loading=true
+  // propagates through the render cycle. useRef is synchronous and instant.
+  const submittingRef = useRef(false);
+
+  const onSubmit = useCallback(async (e) => {
     e.preventDefault();
+
+    // Synchronous guard — blocks double-submit before React re-renders
+    if (submittingRef.current) return;
 
     if (!user) return toast.error('Login to send message');
     if (!selectedChat?._id) return toast.error('Please select a chat first.');
-    if (user?.isActive === false) return toast.error('Please activate your account before using this feature.');
 
     if ((mode === 'image' && user.credits < 2) || (mode === 'text' && user.credits < 1)) {
       return toast.error('Not enough credits to continue.');
     }
 
+    // Lock immediately — synchronous, before any awaits
+    submittingRef.current = true;
     setLoading(true);
+
     const promptCopy = prompt;
     setPrompt('');
 
+    // Optimistically show user message in UI
     setMessages(prev => [
       ...prev,
       {
         role: 'user',
         content: promptCopy,
-        timestamp: new Date().toISOString(),
+        timeStamp: Date.now(),
         isImage: false,
       }
     ]);
@@ -49,33 +61,49 @@ const ChatBox = () => {
           chatId: selectedChat._id,
           prompt: promptCopy,
           isPublished
-        },
-        {
-          headers: { Authorization: token }
         }
       );
 
       if (data.success) {
         setMessages(prev => [...prev, data.reply]);
 
-        // Decrease credits
         const creditCost = mode === 'image' ? 2 : 1;
-        setUser(prev => ({
-          ...prev,
-          credits: prev.credits - creditCost
-        }));
+        setUser(prev => ({ ...prev, credits: prev.credits - creditCost }));
       } else {
+        // Structured error from backend — show specific message
         toast.error(data.message || 'Something went wrong.');
-        setPrompt(promptCopy);
+        setMessages(prev => prev.slice(0, -1)); // remove optimistic user message
+        setPrompt(promptCopy);                  // restore prompt so user can retry
       }
     } catch (error) {
-      console.error("Request error:", error.response?.data || error.message);
-      toast.error(error.response?.data?.message || error.message);
-      setPrompt(promptCopy);
+      const status  = error.response?.status;
+      const errData = error.response?.data;
+
+      console.error('[ChatBox] Request failed:', { status, errData, msg: error.message });
+
+      if (status === 429) {
+        const wait = errData?.retryAfter ?? 10;
+        toast.error(`⏱ Rate limited — please wait ${wait}s before trying again.`, { duration: wait * 1000 });
+      } else if (status === 402) {
+        toast.error('Not enough credits. Please purchase more.');
+      } else if (status === 502 || status === 503) {
+        toast.error('AI service temporarily unavailable. Please try again in a moment.');
+      } else if (status >= 500) {
+        toast.error('Server error. Our team has been notified.');
+      } else if (!status) {
+        // Network error — no response at all
+        toast.error('Network error — check your internet connection.');
+      } else {
+        toast.error(errData?.message || error.message || 'Something went wrong.');
+      }
+
+      setMessages(prev => prev.slice(0, -1)); // remove optimistic user message
+      setPrompt(promptCopy);                  // restore prompt
     } finally {
       setLoading(false);
+      submittingRef.current = false; // always unlock, even on error
     }
-  };
+  }, [user, selectedChat, mode, prompt, isPublished, axios, setUser]);
 
 
   // Load selected chat messages
