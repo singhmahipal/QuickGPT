@@ -3,6 +3,7 @@
 @import "tailwindcss";
 
 @custom-variant dark (&:where(.dark, .dark *));
+@custom-variant not-dark (&:not(:where(.dark, .dark *)));
 
 * {
   font-family: "Outfit", sans-serif;

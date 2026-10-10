@@ -68,7 +68,7 @@ export const textMessageController = async (req, res) => {
         let choices;
         try {
             const response = await openai.chat.completions.create({
-                model: "gemini-2.0-flash",
+                model: "gemini-2.5-flash",
                 messages: history,
                 max_tokens: 2048,
             });
@@ -158,74 +158,49 @@ export const imageMessageController = async (req, res) => {
             });
         }
 
-        // ── Generate image via Gemini Imagen 3 ───────────────────────────────
-        // Uses the existing GEMINI_API_KEY — no extra API key or package needed.
-        // Imagen returns base64-encoded PNG bytes directly in the response body,
-        // so there is no intermediate URL to download (faster + more reliable).
+        // ── Generate image via Gemini or fallback ─────────────────────────────
         let imageBuffer;
         try {
             const imagenResponse = await axios.post(
-                `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict`,
+                `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent`,
                 {
-                    instances: [{ prompt }],
-                    parameters: {
-                        sampleCount: 1,
-                        aspectRatio: "1:1",       // square — best for chat UI
-                        safetyFilterLevel: "block_few",
-                    },
+                    contents: [{ parts: [{ text: prompt }] }],
+                    generationConfig: {
+                        responseModalities: ["IMAGE", "TEXT"],
+                    }
                 },
                 {
                     params: { key: process.env.GEMINI_API_KEY },
                     headers: { 'Content-Type': 'application/json' },
-                    timeout: 60000, // 60s — Imagen can take up to ~30s on first call
+                    timeout: 60000,
                 }
             );
 
-            // Gemini Imagen returns: { predictions: [{ bytesBase64Encoded, mimeType }] }
-            const prediction = imagenResponse.data?.predictions?.[0];
+            const candidate = imagenResponse.data?.candidates?.[0];
+            const inlineData = candidate?.content?.parts?.find(p => p.inlineData)?.inlineData;
 
-            if (!prediction?.bytesBase64Encoded) {
-                logError('Gemini Imagen', new Error(
-                    `Unexpected Imagen response: ${JSON.stringify(imagenResponse.data)}`
-                ));
+            if (inlineData?.data) {
+                imageBuffer = Buffer.from(inlineData.data, 'base64');
+            } else {
+                throw new Error("Gemini image response missing inline data");
+            }
+        } catch (apiError) {
+            logError('Gemini Image API (trying fallback Pollinations)', apiError);
+            try {
+                const fallbackUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=512&height=512&nologo=true`;
+                const fallbackRes = await axios.get(fallbackUrl, {
+                    responseType: 'arraybuffer',
+                    timeout: 30000,
+                });
+                imageBuffer = Buffer.from(fallbackRes.data);
+            } catch (fallbackErr) {
+                logError('Pollinations Fallback', fallbackErr);
                 return res.status(502).json({
                     success: false,
-                    message: "Image generation returned no data. Please try a different prompt.",
-                    errorCode: "IMAGEN_EMPTY_RESPONSE"
+                    message: "Image generation service unavailable. Please try again.",
+                    errorCode: "IMAGE_API_ERROR"
                 });
             }
-
-            // Decode base64 directly to buffer — no download step needed
-            imageBuffer = Buffer.from(prediction.bytesBase64Encoded, 'base64');
-
-        } catch (apiError) {
-            logError('Gemini Imagen', apiError);
-
-            const status = apiError?.response?.status;
-
-            if (status === 429) {
-                return res.status(429).json({
-                    success: false,
-                    message: "Image generation service is rate limited. Please try again in a moment.",
-                    errorCode: "UPSTREAM_RATE_LIMIT",
-                    retryAfter: 15,
-                });
-            }
-
-            if (status === 400) {
-                // Usually means the prompt was blocked by safety filters
-                return res.status(400).json({
-                    success: false,
-                    message: "Your prompt was blocked by the safety filter. Please rephrase and try again.",
-                    errorCode: "PROMPT_BLOCKED"
-                });
-            }
-
-            return res.status(502).json({
-                success: false,
-                message: "Image generation service unavailable. Please try again.",
-                errorCode: "IMAGE_API_ERROR"
-            });
         }
 
 

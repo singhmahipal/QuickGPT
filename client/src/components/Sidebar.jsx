@@ -229,7 +229,8 @@ const ChatItem = React.memo(({ chat, onChatSelect, onDelete }) => {
         onClick={onDelete}
         src={assets.bin_icon}
         alt="delete icon"
-        className="opacity-0 group-hover:opacity-100 w-4 cursor-pointer not-dark:invert transition-opacity flex-shrink-0 ml-2"
+        className="opacity-70 hover:opacity-100 group-hover:opacity-100 max-md:opacity-100 w-4 cursor-pointer invert dark:invert-0 transition-opacity flex-shrink-0 ml-2 p-0.5 hover:scale-110"
+        title="Delete Chat"
       />
     </div>
   );
