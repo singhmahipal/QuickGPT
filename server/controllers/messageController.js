@@ -64,40 +64,47 @@ export const textMessageController = async (req, res) => {
         // Append the current user prompt
         history.push({ role: 'user', content: prompt });
 
-        // ── Call Gemini via OpenAI-compatible client ───────────────────────────
-        let choices;
-        try {
-            const response = await openai.chat.completions.create({
-                model: "gemini-2.5-flash",
-                messages: history,
-                max_tokens: 2048,
-            });
-            choices = response.choices;
-        } catch (apiError) {
-            logError('Gemini API', apiError);
+        // ── Call Gemini via OpenAI-compatible client with model fallbacks ─────
+        const CANDIDATE_MODELS = [
+            "gemini-flash-latest",
+            "gemini-flash-lite-latest",
+            "gemini-2.5-flash",
+        ];
 
-            // Surface Gemini-specific rate limit as 429
-            if (apiError?.status === 429 || apiError?.response?.status === 429) {
+        let choices;
+        let lastError = null;
+
+        for (const candidateModel of CANDIDATE_MODELS) {
+            try {
+                const response = await openai.chat.completions.create({
+                    model: candidateModel,
+                    messages: history,
+                    max_tokens: 2048,
+                });
+                choices = response.choices;
+                if (choices && choices.length > 0) break;
+            } catch (apiError) {
+                lastError = apiError;
+                logError(`Gemini API (${candidateModel})`, apiError);
+                if (apiError?.status === 429 || apiError?.response?.status === 429) {
+                    break;
+                }
+            }
+        }
+
+        if (!choices || choices.length === 0) {
+            if (lastError?.status === 429 || lastError?.response?.status === 429) {
                 return res.status(429).json({
                     success: false,
                     message: "AI service is currently rate limited. Please wait a moment and try again.",
                     errorCode: "UPSTREAM_RATE_LIMIT",
-                    retryAfter: 10, // seconds — hint for the frontend
-                });
-            }
-
-            // Surface Gemini 404 (model deprecated or unavailable)
-            if (apiError?.status === 404 || apiError?.response?.status === 404) {
-                return res.status(502).json({
-                    success: false,
-                    message: "Selected AI model is currently unavailable on Gemini endpoint. Please check your model configuration or GEMINI_API_KEY.",
-                    errorCode: "MODEL_NOT_FOUND"
+                    retryAfter: 10,
                 });
             }
 
             return res.status(502).json({
                 success: false,
-                message: "AI service unavailable. Please try again shortly.",
+                message: lastError?.message || "AI service unavailable. Please try again shortly.",
                 errorCode: "UPSTREAM_ERROR"
             });
         }
