@@ -88,11 +88,13 @@ const ChatBox = () => {
         toast.error('Not enough credits. Please purchase more.');
       } else if (status === 502 || status === 503) {
         toast.error('AI service temporarily unavailable. Please try again in a moment.');
+      } else if (status === 404) {
+        toast.error(errData?.message || 'Server endpoint not found (404). Verify that your backend server is running and VITE_SERVER_URL is configured correctly.');
       } else if (status >= 500) {
-        toast.error('Server error. Our team has been notified.');
+        toast.error(errData?.message || 'Server error. Please try again shortly.');
       } else if (!status) {
         // Network error — no response at all
-        toast.error('Network error — check your internet connection.');
+        toast.error('Network error — check your backend connection.');
       } else {
         toast.error(errData?.message || error.message || 'Something went wrong.');
       }

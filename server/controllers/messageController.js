@@ -86,6 +86,15 @@ export const textMessageController = async (req, res) => {
                 });
             }
 
+            // Surface Gemini 404 (model deprecated or unavailable)
+            if (apiError?.status === 404 || apiError?.response?.status === 404) {
+                return res.status(502).json({
+                    success: false,
+                    message: "Selected AI model is currently unavailable on Gemini endpoint. Please check your model configuration or GEMINI_API_KEY.",
+                    errorCode: "MODEL_NOT_FOUND"
+                });
+            }
+
             return res.status(502).json({
                 success: false,
                 message: "AI service unavailable. Please try again shortly.",
