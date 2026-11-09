@@ -66,9 +66,10 @@ export const textMessageController = async (req, res) => {
 
         // ── Call Gemini via OpenAI-compatible client with model fallbacks ─────
         const CANDIDATE_MODELS = [
-            "gemini-flash-latest",
-            "gemini-flash-lite-latest",
-            "gemini-2.5-flash",
+            "gemini-3.1-flash-lite",
+            "gemini-3.5-flash-lite",
+            "gemini-3.5-flash",
+            "gemini-3.8-flash",
         ];
 
         let choices;
@@ -86,9 +87,6 @@ export const textMessageController = async (req, res) => {
             } catch (apiError) {
                 lastError = apiError;
                 logError(`Gemini API (${candidateModel})`, apiError);
-                if (apiError?.status === 429 || apiError?.response?.status === 429) {
-                    break;
-                }
             }
         }
 
@@ -178,7 +176,7 @@ export const imageMessageController = async (req, res) => {
         let imageBuffer;
         try {
             const imagenResponse = await axios.post(
-                `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent`,
+                `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image:generateContent`,
                 {
                     contents: [{ parts: [{ text: prompt }] }],
                     generationConfig: {
@@ -188,7 +186,7 @@ export const imageMessageController = async (req, res) => {
                 {
                     params: { key: process.env.GEMINI_API_KEY },
                     headers: { 'Content-Type': 'application/json' },
-                    timeout: 60000,
+                    timeout: 10000,
                 }
             );
 

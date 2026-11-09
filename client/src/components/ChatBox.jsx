@@ -9,7 +9,7 @@ const ChatBox = () => {
   const containerRef = useRef(null);
 
   // token is no longer needed here — axios interceptor injects it automatically
-  const { selectedChat, theme, user, axios, setUser } = useAppContext();
+  const { selectedChat, setSelectedChat, setChats, theme, user, axios, setUser } = useAppContext();
 
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -67,6 +67,16 @@ const ChatBox = () => {
       if (data.success) {
         setMessages(prev => [...prev, data.reply]);
 
+        setSelectedChat(prev => prev ? {
+          ...prev,
+          messages: [...(prev.messages || []), { role: 'user', content: promptCopy, timeStamp: Date.now(), isImage: false }, data.reply]
+        } : prev);
+
+        setChats(prev => prev.map(c => c._id === selectedChat._id ? {
+          ...c,
+          messages: [...(c.messages || []), { role: 'user', content: promptCopy, timeStamp: Date.now(), isImage: false }, data.reply]
+        } : c));
+
         const creditCost = mode === 'image' ? 2 : 1;
         setUser(prev => ({ ...prev, credits: prev.credits - creditCost }));
       } else {
@@ -105,15 +115,15 @@ const ChatBox = () => {
       setLoading(false);
       submittingRef.current = false; // always unlock, even on error
     }
-  }, [user, selectedChat, mode, prompt, isPublished, axios, setUser]);
+  }, [user, selectedChat, mode, prompt, isPublished, axios, setUser, setSelectedChat, setChats]);
 
 
   // Load selected chat messages
   useEffect(() => {
     if (selectedChat) {
-      setMessages(selectedChat.messages);
+      setMessages(selectedChat.messages || []);
     }
-  }, [selectedChat]);
+  }, [selectedChat?._id]);
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
